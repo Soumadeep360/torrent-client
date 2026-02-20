@@ -1,0 +1,13 @@
+# Binaries
+torrent-client
+*.exe
+*.out
+*.bin
+
+# Go build
+bin/
+dist/
+
+# OS
+.DS_Store
+
