@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultWorkers = 20 // Default number of concurrent workers
+	defaultWorkers = 50 // Default number of concurrent workers (override with -workers N)
 )
 
 func main() {
