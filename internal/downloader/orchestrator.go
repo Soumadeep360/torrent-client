@@ -95,6 +95,11 @@ func (o *Orchestrator) Download() error {
 		}
 	}
 
+	// Only report success if we actually got all pieces
+	if downloadedCount < totalPieces {
+		return fmt.Errorf("incomplete download: got %d/%d pieces (missing %d). Some peers may be unreachable; try again later", downloadedCount, totalPieces, totalPieces-downloadedCount)
+	}
+
 	// Verify file size
 	if err := writer.VerifyFileSize(); err != nil {
 		return fmt.Errorf("file size verification failed: %w", err)

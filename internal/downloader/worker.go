@@ -134,18 +134,24 @@ func (m *Manager) downloadPieceFromPeer(peerAddr tracker.Peer, work PieceWork) (
 			return nil, fmt.Errorf("failed to send request: %w", err)
 		}
 
-		// Wait for piece message (ID = 7)
-		msg, err := peer.ReadMessage(conn.Conn)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read piece message: %w", err)
-		}
-
-		if msg == nil {
-			return nil, fmt.Errorf("unexpected keep-alive during download")
-		}
-
-		if msg.ID != 7 {
-			return nil, fmt.Errorf("expected piece message (7), got %d", msg.ID)
+		// Wait for piece message (ID = 7). Peer may send Choke/Unchoke/Have in between.
+		var msg *peer.Message
+		for {
+			var err error
+			msg, err = peer.ReadMessage(conn.Conn)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read piece message: %w", err)
+			}
+			if msg == nil {
+				continue // Keep-alive
+			}
+			if msg.ID == 7 {
+				break // Piece message - process it below
+			}
+			// Choke (0), Unchoke (1), Have (4), etc. - skip and keep reading
+			if msg.ID == 0 {
+				return nil, fmt.Errorf("peer choked us during download")
+			}
 		}
 
 		// Parse piece message: <index><begin><block>
