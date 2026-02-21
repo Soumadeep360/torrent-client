@@ -22,11 +22,12 @@ ok  	github.com/yourusername/torrent-client/internal/torrent	0.474s
 
 ```bash
 # Download a small test torrent (~600MB, fast download)
-wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-12.5.0-amd64-netinst.iso.torrent
+# (Debian "current" version changes; check https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/ if 404)
+wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.3.0-amd64-netinst.iso.torrent
 
 # Build and run
 go build -o torrent-client ./cmd/main.go
-./torrent-client debian-12.5.0-amd64-netinst.iso.torrent
+./torrent-client debian-13.3.0-amd64-netinst.iso.torrent
 ```
 
 **Expected output**:
@@ -57,7 +58,7 @@ Progress: 100.0% (2516/2516 pieces)
 ls -lh debian-12.5.0-amd64-netinst.iso
 
 # Should show ~629 MB file
--rw-r--r--  1 user  staff   629M Feb 19 20:30 debian-12.5.0-amd64-netinst.iso
+-rw-r--r--  1 user  staff   629M Feb 19 20:30 debian-13.3.0-amd64-netinst.iso
 ```
 
 ---
@@ -154,7 +155,8 @@ After running tests, you should see:
 
 ### Small & Fast (~600MB)
 ```bash
-wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-12.5.0-amd64-netinst.iso.torrent
+# Current version (check cdimage.debian.org if 404)
+wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.3.0-amd64-netinst.iso.torrent
 ```
 
 ### Medium (~4.5GB)
@@ -241,8 +243,8 @@ go test ./... && echo "✅ Tests pass!"
 
 **Best test**:
 ```bash
-wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-12.5.0-amd64-netinst.iso.torrent
-./torrent-client debian-12.5.0-amd64-netinst.iso.torrent
+wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.3.0-amd64-netinst.iso.torrent
+./torrent-client debian-13.3.0-amd64-netinst.iso.torrent
 # Watch it download! 🎊
 ```
 
