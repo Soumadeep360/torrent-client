@@ -14,8 +14,8 @@ const (
 	// Block size for requests (16KB is standard)
 	blockSize = 16384
 
-	// Maximum number of retries per piece
-	maxRetries = 3
+	// Maximum number of peer attempts per piece (tries different peers)
+	maxRetries = 10
 )
 
 // runWorker is executed by each worker goroutine

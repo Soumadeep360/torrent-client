@@ -29,57 +29,63 @@ const (
 	peerPort = 6881
 )
 
-// GetPeers contacts the tracker and retrieves a list of peers
-func GetPeers(meta *torrent.TorrentMeta) ([]Peer, error) {
-	// Generate a unique peer ID (20 bytes)
+// GetPeers contacts the tracker and retrieves a list of peers (generates a new peer ID).
+// Returns peers and the tracker's requested re-announce interval in seconds (0 if not provided).
+func GetPeers(meta *torrent.TorrentMeta) ([]Peer, int, error) {
 	peerID, err := generatePeerID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate peer ID: %w", err)
+		return nil, 0, fmt.Errorf("failed to generate peer ID: %w", err)
 	}
-
-	// Build tracker request URL
 	trackerURL, err := buildTrackerURL(meta, peerID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build tracker URL: %w", err)
+		return nil, 0, fmt.Errorf("failed to build tracker URL: %w", err)
 	}
+	return getPeersFromURL(trackerURL)
+}
 
-	// Make HTTP GET request to tracker
+// GetPeersWithPeerID contacts the tracker with the given peer ID and returns peers
+// and the tracker's re-announce interval (seconds). Use for re-announces so the
+// tracker sees the same client.
+func GetPeersWithPeerID(meta *torrent.TorrentMeta, peerID [20]byte) ([]Peer, int, error) {
+	trackerURL, err := buildTrackerURLWithPeerID(meta, peerID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to build tracker URL: %w", err)
+	}
+	return getPeersFromURL(trackerURL)
+}
+
+// getPeersFromURL fetches peers from the tracker URL and returns peers plus the
+// announce interval (seconds) the tracker requested for re-announces.
+func getPeersFromURL(trackerURL string) ([]Peer, int, error) {
 	resp, err := http.Get(trackerURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to contact tracker: %w", err)
+		return nil, 0, fmt.Errorf("failed to contact tracker: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tracker returned status: %s", resp.Status)
+		return nil, 0, fmt.Errorf("tracker returned status: %s", resp.Status)
 	}
 
-	// Parse tracker response
 	var trackerResp trackerResponse
 	if err := bencode.Unmarshal(resp.Body, &trackerResp); err != nil {
-		return nil, fmt.Errorf("failed to decode tracker response: %w", err)
+		return nil, 0, fmt.Errorf("failed to decode tracker response: %w", err)
 	}
 
-	// Parse peers from compact format
 	peers, err := parsePeers(trackerResp.Peers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse peers: %w", err)
+		return nil, 0, err
 	}
-
-	return peers, nil
+	return peers, trackerResp.Interval, nil
 }
 
-// buildTrackerURL constructs the tracker announce URL with all required parameters
+// buildTrackerURL constructs the tracker announce URL with all required parameters (string peer ID).
 func buildTrackerURL(meta *torrent.TorrentMeta, peerID string) (string, error) {
 	baseURL, err := url.Parse(meta.Announce)
 	if err != nil {
 		return "", err
 	}
-
-	// Calculate bytes left to download
 	left := meta.Length
-
-	// Build query parameters
 	params := url.Values{
 		"info_hash":  []string{string(meta.InfoHash[:])},
 		"peer_id":    []string{peerID},
@@ -87,7 +93,28 @@ func buildTrackerURL(meta *torrent.TorrentMeta, peerID string) (string, error) {
 		"uploaded":   []string{"0"},
 		"downloaded": []string{"0"},
 		"left":       []string{strconv.Itoa(left)},
-		"compact":    []string{"1"}, // Request compact peer format
+		"compact":    []string{"1"},
+	}
+	baseURL.RawQuery = params.Encode()
+	return baseURL.String(), nil
+}
+
+// buildTrackerURLWithPeerID constructs the tracker announce URL with a 20-byte peer ID.
+func buildTrackerURLWithPeerID(meta *torrent.TorrentMeta, peerID [20]byte) (string, error) {
+	baseURL, err := url.Parse(meta.Announce)
+	if err != nil {
+		return "", err
+	}
+
+	left := meta.Length
+	params := url.Values{
+		"info_hash":  []string{string(meta.InfoHash[:])},
+		"peer_id":    []string{string(peerID[:])},
+		"port":       []string{strconv.Itoa(peerPort)},
+		"uploaded":   []string{"0"},
+		"downloaded": []string{"0"},
+		"left":       []string{strconv.Itoa(left)},
+		"compact":    []string{"1"},
 	}
 
 	baseURL.RawQuery = params.Encode()

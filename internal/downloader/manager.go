@@ -42,12 +42,14 @@ type Manager struct {
 	resultQueue  chan PieceResult
 	pieces       []Piece
 	numWorkers   int
+	pieceIndices []int // indices to download; nil means all
 	downloaded   int32 // Atomic counter for downloaded pieces
 	mu           sync.Mutex
 }
 
-// NewManager creates a new download manager
-func NewManager(meta *torrent.TorrentMeta, peers []tracker.Peer, peerID [20]byte, numWorkers int) *Manager {
+// NewManager creates a new download manager. If pieceIndices is non-nil, only those
+// piece indices are queued (for retries); otherwise all pieces are queued.
+func NewManager(meta *torrent.TorrentMeta, peers []tracker.Peer, peerID [20]byte, numWorkers int, pieceIndices []int) *Manager {
 	// Initialize pieces
 	pieces := make([]Piece, meta.NumPieces())
 	for i := 0; i < meta.NumPieces(); i++ {
@@ -58,29 +60,48 @@ func NewManager(meta *torrent.TorrentMeta, peers []tracker.Peer, peerID [20]byte
 		}
 	}
 
+	queueCap := meta.NumPieces()
+	if pieceIndices != nil {
+		queueCap = len(pieceIndices)
+	}
+	if queueCap < numWorkers*2 {
+		queueCap = numWorkers * 2
+	}
+
 	return &Manager{
-		meta:        meta,
-		peers:       peers,
-		peerID:      peerID,
-		workQueue:   make(chan PieceWork, meta.NumPieces()),
-		resultQueue: make(chan PieceResult),
-		pieces:      pieces,
-		numWorkers:  numWorkers,
-		downloaded:  0,
+		meta:         meta,
+		peers:        peers,
+		peerID:       peerID,
+		workQueue:    make(chan PieceWork, queueCap),
+		resultQueue:  make(chan PieceResult),
+		pieces:       pieces,
+		numWorkers:   numWorkers,
+		pieceIndices: pieceIndices,
+		downloaded:   0,
 	}
 }
 
 // Start begins the download process with worker pool
 func (m *Manager) Start() error {
-	// Fill work queue with all pieces
-	for i := 0; i < len(m.pieces); i++ {
-		m.workQueue <- PieceWork{
-			Index:  m.pieces[i].Index,
-			Hash:   m.pieces[i].Hash,
-			Length: m.pieces[i].Length,
+	indices := m.pieceIndices
+	if indices == nil {
+		for i := 0; i < len(m.pieces); i++ {
+			m.workQueue <- PieceWork{
+				Index:  m.pieces[i].Index,
+				Hash:   m.pieces[i].Hash,
+				Length: m.pieces[i].Length,
+			}
+		}
+	} else {
+		for _, i := range indices {
+			m.workQueue <- PieceWork{
+				Index:  m.pieces[i].Index,
+				Hash:   m.pieces[i].Hash,
+				Length: m.pieces[i].Length,
+			}
 		}
 	}
-	close(m.workQueue) // No more work will be added
+	close(m.workQueue)
 
 	// Start workers using goroutines
 	var wg sync.WaitGroup

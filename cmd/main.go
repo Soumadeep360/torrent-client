@@ -47,11 +47,12 @@ func main() {
 	printTorrentInfo(meta, *verbose)
 	fmt.Println()
 
-	// Step 2: Contact tracker
+	// Step 2: Contact tracker (use same peer ID for tracker and download)
 	fmt.Println("=== Step 2: Contacting Tracker ===")
 	fmt.Printf("Tracker: %s\n", meta.Announce)
 
-	peers, err := tracker.GetPeers(meta)
+	peerID := generatePeerID()
+	peers, _, err := tracker.GetPeersWithPeerID(meta, peerID)
 	if err != nil {
 		log.Fatalf("Failed to get peers from tracker: %v", err)
 	}
@@ -62,14 +63,12 @@ func main() {
 	}
 	fmt.Println()
 
-	// Check if we have enough peers
 	if len(peers) == 0 {
 		log.Fatal("No peers available. Cannot download.")
 	}
 
 	// Step 3: Prepare download
 	fmt.Println("=== Step 3: Preparing Download ===")
-	peerID := generatePeerID()
 	outputPath := filepath.Join(*outputDir, meta.Name)
 
 	fmt.Printf("Workers: %d\n", *numWorkers)
