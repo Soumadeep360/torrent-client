@@ -15,15 +15,13 @@ type Writer struct {
 	writeCount int
 }
 
-// NewWriter creates a new file writer
+// NewWriter creates a new file writer (creates or truncates the file)
 func NewWriter(filePath string, totalSize int64) (*Writer, error) {
-	// Create or truncate the file
 	file, err := os.Create(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
 
-	// Pre-allocate file space (optional but improves performance)
 	if err := file.Truncate(totalSize); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("failed to allocate file space: %w", err)
@@ -34,6 +32,49 @@ func NewWriter(filePath string, totalSize int64) (*Writer, error) {
 		filePath:  filePath,
 		totalSize: totalSize,
 	}, nil
+}
+
+// NewWriterForResume opens the file for resume: if it exists and has the expected size,
+// it is opened for read/write without truncation so existing pieces can be verified and
+// only missing ones downloaded. If the file does not exist or has wrong size, it is
+// created or truncated to totalSize.
+func NewWriterForResume(filePath string, totalSize int64) (*Writer, error) {
+	fi, err := os.Stat(filePath)
+	if err == nil {
+		// File exists
+		file, openErr := os.OpenFile(filePath, os.O_RDWR, 0666)
+		if openErr != nil {
+			return nil, fmt.Errorf("failed to open file for resume: %w", openErr)
+		}
+		if fi.Size() != totalSize {
+			if truncErr := file.Truncate(totalSize); truncErr != nil {
+				file.Close()
+				return nil, fmt.Errorf("failed to resize file to %d: %w", totalSize, truncErr)
+			}
+		}
+		return &Writer{
+			file:      file,
+			filePath:  filePath,
+			totalSize: totalSize,
+		}, nil
+	}
+	if os.IsNotExist(err) {
+		return NewWriter(filePath, totalSize)
+	}
+	return nil, fmt.Errorf("failed to stat file: %w", err)
+}
+
+// ReadAt reads length bytes at offset from the file (for verifying existing pieces)
+func (w *Writer) ReadAt(offset int64, length int) ([]byte, error) {
+	buf := make([]byte, length)
+	n, err := w.file.ReadAt(buf, offset)
+	if err != nil {
+		return nil, fmt.Errorf("read at %d: %w", offset, err)
+	}
+	if n != length {
+		return nil, fmt.Errorf("read at %d: got %d bytes, want %d", offset, n, length)
+	}
+	return buf, nil
 }
 
 // WritePiece writes a piece to the file at the specified offset

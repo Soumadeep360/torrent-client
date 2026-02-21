@@ -49,8 +49,8 @@ func (o *Orchestrator) Download() error {
 	// Create progress tracker
 	progressTracker := progress.NewTracker(o.meta.NumPieces(), int64(o.meta.Length))
 
-	// Create file writer
-	writer, err := filewriter.NewWriter(o.outputPath, int64(o.meta.Length))
+	// Create or open file for resume (keeps existing data if file exists and has correct size)
+	writer, err := filewriter.NewWriterForResume(o.outputPath, int64(o.meta.Length))
 	if err != nil {
 		return fmt.Errorf("failed to create file writer: %w", err)
 	}
@@ -63,6 +63,24 @@ func (o *Orchestrator) Download() error {
 	remaining := make(map[int]struct{})
 	for i := 0; i < totalPieces; i++ {
 		remaining[i] = struct{}{}
+	}
+
+	// Idempotency: verify already-downloaded pieces on disk and skip them
+	for i := 0; i < totalPieces; i++ {
+		pieceLen := o.meta.PieceSize(i)
+		offset := int64(i) * int64(o.meta.PieceLength)
+		data, err := writer.ReadAt(offset, pieceLen)
+		if err != nil {
+			continue // file too short or read error; will re-download this piece
+		}
+		if err := VerifyPiece(data, o.meta.Pieces[i]); err != nil {
+			continue // hash mismatch; will re-download this piece
+		}
+		delete(remaining, i)
+		progressTracker.AddPiece(pieceLen)
+	}
+	if len(remaining) < totalPieces {
+		fmt.Printf("Resuming: %d pieces already present, %d to download.\n", totalPieces-len(remaining), len(remaining))
 	}
 
 	peers := o.peers
@@ -130,8 +148,9 @@ func (o *Orchestrator) Download() error {
 	}
 
 	fmt.Println()
-	if downloadedCount < totalPieces {
-		return fmt.Errorf("incomplete download: got %d/%d pieces (missing %d)", downloadedCount, totalPieces, totalPieces-downloadedCount)
+	completedCount := totalPieces - len(remaining)
+	if completedCount < totalPieces {
+		return fmt.Errorf("incomplete download: got %d/%d pieces (missing %d)", completedCount, totalPieces, len(remaining))
 	}
 
 	// Verify file size
