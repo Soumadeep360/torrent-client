@@ -50,7 +50,7 @@ func (o *Orchestrator) Download() error {
 	progressTracker := progress.NewTracker(o.meta.NumPieces(), int64(o.meta.Length))
 
 	// Create or open file for resume (keeps existing data if file exists and has correct size)
-	writer, err := filewriter.NewWriterForResume(o.outputPath, int64(o.meta.Length))
+	writer, err := filewriter.NewWriterForResume(o.outputPath, int64(o.meta.Length), o.meta.PieceLength)
 	if err != nil {
 		return fmt.Errorf("failed to create file writer: %w", err)
 	}
@@ -118,12 +118,11 @@ func (o *Orchestrator) Download() error {
 			}
 		}
 
-		var pieceIndices []int
-		if round > 0 {
-			pieceIndices = make([]int, 0, len(remaining))
-			for i := range remaining {
-				pieceIndices = append(pieceIndices, i)
-			}
+		// FIX: Always create pieceIndices from remaining (including round 0)
+		// This prevents downloading pieces that are already on disk
+		pieceIndices := make([]int, 0, len(remaining))
+		for i := range remaining {
+			pieceIndices = append(pieceIndices, i)
 		}
 
 		manager := NewManager(o.meta, peers, o.peerID, o.numWorkers, pieceIndices)
@@ -142,7 +141,7 @@ func (o *Orchestrator) Download() error {
 
 			delete(remaining, result.Index)
 
-			err := writer.WritePiece(result.Index, len(result.Data), result.Data)
+			err := writer.WritePiece(result.Index, result.Data)
 			if err != nil {
 				return fmt.Errorf("failed to write piece %d: %w", result.Index, err)
 			}

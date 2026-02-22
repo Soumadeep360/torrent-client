@@ -8,15 +8,16 @@ import (
 
 // Writer handles writing pieces to disk concurrently
 type Writer struct {
-	file       *os.File
-	filePath   string
-	totalSize  int64
-	mu         sync.Mutex
-	writeCount int
+	file        *os.File
+	filePath    string
+	totalSize   int64
+	pieceLength int // Standard piece length for offset calculation
+	mu          sync.Mutex
+	writeCount  int
 }
 
 // NewWriter creates a new file writer (creates or truncates the file)
-func NewWriter(filePath string, totalSize int64) (*Writer, error) {
+func NewWriter(filePath string, totalSize int64, pieceLength int) (*Writer, error) {
 	file, err := os.Create(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create file: %w", err)
@@ -28,9 +29,10 @@ func NewWriter(filePath string, totalSize int64) (*Writer, error) {
 	}
 
 	return &Writer{
-		file:      file,
-		filePath:  filePath,
-		totalSize: totalSize,
+		file:        file,
+		filePath:    filePath,
+		totalSize:   totalSize,
+		pieceLength: pieceLength,
 	}, nil
 }
 
@@ -38,7 +40,7 @@ func NewWriter(filePath string, totalSize int64) (*Writer, error) {
 // it is opened for read/write without truncation so existing pieces can be verified and
 // only missing ones downloaded. If the file does not exist or has wrong size, it is
 // created or truncated to totalSize.
-func NewWriterForResume(filePath string, totalSize int64) (*Writer, error) {
+func NewWriterForResume(filePath string, totalSize int64, pieceLength int) (*Writer, error) {
 	fi, err := os.Stat(filePath)
 	if err == nil {
 		// File exists
@@ -53,13 +55,14 @@ func NewWriterForResume(filePath string, totalSize int64) (*Writer, error) {
 			}
 		}
 		return &Writer{
-			file:      file,
-			filePath:  filePath,
-			totalSize: totalSize,
+			file:        file,
+			filePath:    filePath,
+			totalSize:   totalSize,
+			pieceLength: pieceLength,
 		}, nil
 	}
 	if os.IsNotExist(err) {
-		return NewWriter(filePath, totalSize)
+		return NewWriter(filePath, totalSize, pieceLength)
 	}
 	return nil, fmt.Errorf("failed to stat file: %w", err)
 }
@@ -79,13 +82,11 @@ func (w *Writer) ReadAt(offset int64, length int) ([]byte, error) {
 
 // WritePiece writes a piece to the file at the specified offset
 // This method is safe for concurrent use from multiple goroutines
-func (w *Writer) WritePiece(pieceIndex int, pieceLength int, data []byte) error {
-	if len(data) != pieceLength {
-		return fmt.Errorf("data length mismatch: expected %d, got %d", pieceLength, len(data))
-	}
-
-	// Calculate file offset for this piece
-	offset := int64(pieceIndex) * int64(pieceLength)
+// FIX: Uses standard piece length for offset calculation (last piece may be smaller)
+func (w *Writer) WritePiece(pieceIndex int, data []byte) error {
+	// Calculate file offset using STANDARD piece length
+	// This ensures correct spacing even when last piece is smaller
+	offset := int64(pieceIndex) * int64(w.pieceLength)
 
 	// WriteAt is thread-safe and can be called concurrently
 	// It writes at the specified offset without changing the file position
@@ -144,7 +145,7 @@ func WriteAllPieces(filePath string, pieces [][]byte, pieceLength int) error {
 	}
 
 	// Create writer
-	writer, err := NewWriter(filePath, totalSize)
+	writer, err := NewWriter(filePath, totalSize, pieceLength)
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func WriteAllPieces(filePath string, pieces [][]byte, pieceLength int) error {
 
 	// Write each piece
 	for i, pieceData := range pieces {
-		if err := writer.WritePiece(i, pieceLength, pieceData); err != nil {
+		if err := writer.WritePiece(i, pieceData); err != nil {
 			return fmt.Errorf("failed to write piece %d: %w", i, err)
 		}
 	}
