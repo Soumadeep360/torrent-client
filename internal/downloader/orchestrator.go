@@ -59,7 +59,7 @@ func (o *Orchestrator) Download() error {
 	totalPieces := o.meta.NumPieces()
 	downloadedCount := 0
 	const minIntervalSec = 5   // minimum delay between re-announces (tracker interval can be 0 or very small)
-	const retryDelaySec = 30   // delay before re-announce when retrying missing pieces (avoids 15-min waits)
+	const retryDelaySec = 30   // delay between retry rounds when using same peers (no tracker call)
 	remaining := make(map[int]struct{})
 	for i := 0; i < totalPieces; i++ {
 		remaining[i] = struct{}{}
@@ -85,28 +85,36 @@ func (o *Orchestrator) Download() error {
 
 	peers := o.peers
 	announceIntervalSec := minIntervalSec
+	lastAnnounceTime := time.Now() // treat initial peer list as just announced (respect interval from first re-announce)
 	for round := 0; ; round++ {
 		if len(remaining) == 0 {
 			break
 		}
 		if round > 0 {
-			// Use short delay for retries so we don't wait the full tracker interval (e.g. 900s) between rounds.
-			delaySec := retryDelaySec
-			if delaySec > announceIntervalSec {
-				delaySec = announceIntervalSec
-			}
-			time.Sleep(time.Duration(delaySec) * time.Second)
-			var err error
-			peers, announceIntervalSec, err = tracker.GetPeersWithPeerID(o.meta, o.peerID)
-			if err != nil {
-				fmt.Printf("\nRe-announce failed: %v; using previous peer list. Retry round %d: %d pieces left\n", err, round+1, len(remaining))
-			} else if len(peers) == 0 {
-				fmt.Printf("\nRe-announce returned 0 peers; using previous list. Retry round %d: %d pieces left\n", round+1, len(remaining))
+			// Short delay between retry rounds (we retry with same peers often; only re-announce when tracker allows).
+			time.Sleep(time.Duration(retryDelaySec) * time.Second)
+
+			// Re-announce to tracker only when the tracker's interval has elapsed (avoids rate limits / bans).
+			if time.Since(lastAnnounceTime) >= time.Duration(announceIntervalSec)*time.Second {
+				var err error
+				peers, announceIntervalSec, err = tracker.GetPeersWithPeerID(o.meta, o.peerID)
+				lastAnnounceTime = time.Now()
+				if err != nil {
+					fmt.Printf("\nRe-announce failed: %v; using previous peer list. Retry round %d: %d pieces left\n", err, round+1, len(remaining))
+				} else if len(peers) == 0 {
+					fmt.Printf("\nRe-announce returned 0 peers; using previous list. Retry round %d: %d pieces left\n", round+1, len(remaining))
+				} else {
+					fmt.Printf("\nRe-announced: %d peers (next in %ds). Retry round %d: %d pieces left\n", len(peers), announceIntervalSec, round+1, len(remaining))
+				}
+				if announceIntervalSec < minIntervalSec {
+					announceIntervalSec = minIntervalSec
+				}
 			} else {
-				fmt.Printf("\nRe-announced: %d peers (next in %ds). Retry round %d: %d pieces left\n", len(peers), announceIntervalSec, round+1, len(remaining))
-			}
-			if announceIntervalSec < minIntervalSec {
-				announceIntervalSec = minIntervalSec
+				secUntilAnnounce := announceIntervalSec - int(time.Since(lastAnnounceTime).Seconds())
+				if secUntilAnnounce < 0 {
+					secUntilAnnounce = 0
+				}
+				fmt.Printf("\nRetry round %d with same peers (re-announce in %ds). %d pieces left\n", round+1, secUntilAnnounce, len(remaining))
 			}
 		}
 
