@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
-	"time"
 
 	"github.com/yourusername/torrent-client/internal/peer"
 	"github.com/yourusername/torrent-client/internal/tracker"
@@ -178,9 +177,4 @@ func (m *Manager) downloadPieceFromPeer(peerAddr tracker.Peer, work PieceWork) (
 	}
 
 	return pieceData, nil
-}
-
-func init() {
-	// Seed random number generator for peer selection
-	rand.Seed(time.Now().UnixNano())
 }
