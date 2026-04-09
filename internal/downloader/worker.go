@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
-	"time"
 
 	"github.com/yourusername/torrent-client/internal/peer"
 	"github.com/yourusername/torrent-client/internal/tracker"
@@ -14,8 +13,8 @@ const (
 	// Block size for requests (16KB is standard)
 	blockSize = 16384
 
-	// Maximum number of retries per piece
-	maxRetries = 3
+	// Maximum number of peer attempts per piece (tries different peers)
+	maxRetries = 10
 )
 
 // runWorker is executed by each worker goroutine
@@ -134,18 +133,24 @@ func (m *Manager) downloadPieceFromPeer(peerAddr tracker.Peer, work PieceWork) (
 			return nil, fmt.Errorf("failed to send request: %w", err)
 		}
 
-		// Wait for piece message (ID = 7)
-		msg, err := peer.ReadMessage(conn.Conn)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read piece message: %w", err)
-		}
-
-		if msg == nil {
-			return nil, fmt.Errorf("unexpected keep-alive during download")
-		}
-
-		if msg.ID != 7 {
-			return nil, fmt.Errorf("expected piece message (7), got %d", msg.ID)
+		// Wait for piece message (ID = 7). Peer may send Choke/Unchoke/Have in between.
+		var msg *peer.Message
+		for {
+			var err error
+			msg, err = peer.ReadMessage(conn.Conn)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read piece message: %w", err)
+			}
+			if msg == nil {
+				continue // Keep-alive
+			}
+			if msg.ID == 7 {
+				break // Piece message - process it below
+			}
+			// Choke (0), Unchoke (1), Have (4), etc. - skip and keep reading
+			if msg.ID == 0 {
+				return nil, fmt.Errorf("peer choked us during download")
+			}
 		}
 
 		// Parse piece message: <index><begin><block>
@@ -172,9 +177,4 @@ func (m *Manager) downloadPieceFromPeer(peerAddr tracker.Peer, work PieceWork) (
 	}
 
 	return pieceData, nil
-}
-
-func init() {
-	// Seed random number generator for peer selection
-	rand.Seed(time.Now().UnixNano())
 }

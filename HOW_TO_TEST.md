@@ -24,10 +24,13 @@ ok  	github.com/yourusername/torrent-client/internal/torrent	0.474s
 # Download a small test torrent (~600MB, fast download)
 # (Debian "current" version changes; check https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/ if 404)
 wget https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.3.0-amd64-netinst.iso.torrent
+# On Windows PowerShell, use instead (saves file and avoids security prompt):
+# Invoke-WebRequest -Uri "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.3.0-amd64-netinst.iso.torrent" -OutFile "debian-13.3.0-amd64-netinst.iso.torrent" -UseBasicParsing
 
 # Build and run
 go build -o torrent-client ./cmd/main.go
 ./torrent-client debian-13.3.0-amd64-netinst.iso.torrent
+# On Windows: .\torrent-client.exe debian-13.3.0-amd64-netinst.iso.torrent
 ```
 
 **Expected output**:
@@ -53,13 +56,53 @@ Progress: 100.0% (2516/2516 pieces)
 
 ### 3. Verify Download
 
-```bash
-# Check file was created
-ls -lh debian-12.5.0-amd64-netinst.iso
+The client already verifies integrity automatically:
 
-# Should show ~629 MB file
--rw-r--r--  1 user  staff   629M Feb 19 20:30 debian-13.3.0-amd64-netinst.iso
+- **Per piece**: Each piece is checked against its SHA1 hash from the torrent before being written. Bad data is rejected and re-downloaded.
+- **After completion**: Total file size is checked; if it doesn’t match the torrent, the run fails with "file size verification failed".
+
+So if you see **"✓ Download complete!"** and no error, the file matches the torrent (correct size and piece hashes).
+
+**Quick check (file exists and size):**
+
+```bash
+# Linux/macOS
+ls -lh debian-13.3.0-amd64-netinst.iso
+# Should show ~754 MB for 13.3.0 netinst
+
+# Windows PowerShell
+Get-Item .\debian-13.3.0-amd64-netinst.iso | Select-Object Name, Length
 ```
+
+**Full verification with official checksums (recommended for ISOs):**
+
+Debian publishes SHA256 checksums. Use them to confirm the file matches the official image.
+
+1. Download the checksum file (same directory as the torrent on the mirror):
+
+   ```bash
+   # Example: same base URL as the .torrent
+   # https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/ → ../iso-cd/ has SHA256SUMS
+   wget https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/SHA256SUMS
+   # Windows PowerShell:
+   # Invoke-WebRequest -Uri "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/SHA256SUMS" -OutFile "SHA256SUMS" -UseBasicParsing
+   ```
+
+2. Verify the ISO:
+
+   **Linux/macOS:**
+   ```bash
+   sha256sum -c --ignore-missing SHA256SUMS
+   # Or: grep "debian-13.3.0-amd64-netinst.iso" SHA256SUMS | sha256sum -c -
+   ```
+
+   **Windows PowerShell:**
+   ```powershell
+   Get-FileHash -Algorithm SHA256 .\debian-13.3.0-amd64-netinst.iso
+   # Compare the displayed hash with the line for that filename in SHA256SUMS
+   ```
+
+If the hash matches the line in `SHA256SUMS`, the download is complete and matches the official image. For full authenticity you can also verify the GPG signature of `SHA256SUMS`; see [Debian CD verify](https://www.debian.org/CD/verify).
 
 ---
 
