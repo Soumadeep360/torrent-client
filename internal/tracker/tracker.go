@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/jackpal/bencode-go"
+	"github.com/zeebo/bencode"
 	"github.com/yourusername/torrent-client/internal/torrent"
 )
 
@@ -68,7 +68,7 @@ func getPeersFromURL(trackerURL string) ([]Peer, int, error) {
 	}
 
 	var trackerResp trackerResponse
-	if err := bencode.Unmarshal(resp.Body, &trackerResp); err != nil {
+	if err := bencode.NewDecoder(resp.Body).Decode(&trackerResp); err != nil {
 		return nil, 0, fmt.Errorf("failed to decode tracker response: %w", err)
 	}
 

@@ -18,7 +18,7 @@ const (
 )
 
 // runWorker is executed by each worker goroutine
-func (m *Manager) runWorker(workerID int) {
+func (m *Manager) runWorker() {
 	// Each worker processes pieces from the work queue
 	for work := range m.workQueue {
 		// Try to download this piece
