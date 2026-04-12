@@ -11,6 +11,21 @@
 | `CollectResults`, `GetDownloadedCount`, `AssembleFile` — dead code never called | `manager.go` | Removed all three functions |
 | `Piece.Data []byte`, `Manager.downloaded int32`, `Manager.mu sync.Mutex` — only used by dead code | `manager.go` | Removed all three fields |
 | Custom `min(a, b int)` wrapper — builtin since Go 1.21 | `main.go` | Removed, uses builtin directly |
+| File read twice (once for Unmarshal, once in calculateInfoHash) | `parser.go` | Read once with `os.ReadFile`, reuse bytes for both passes |
+| `calculateInfoHash`, `findMatchingEnd`, `bencodeValueLength`, `bencodeStringLength` — 4 separate functions for one job | `parser.go` | Collapsed into `extractInfoDictBytes` using start/end position tracking on the reader |
+| Entire custom byte-walker (`extractInfoDictBytes`, `readBencodeString`, `skipBencodeValue`) — ~110 lines | `parser.go` | Replaced by `bencode.RawMessage` from `zeebo/bencode`; `jackpal/bencode-go` removed |
+| `Piece` struct — identical fields to `PieceWork`, used only as intermediate | `manager.go` | Removed; `NewManager` builds `[]PieceWork` directly |
+| `Start()` returning `error` it never set | `manager.go` | Changed to `func (m *Manager) Start()` |
+| `nil` branch in `Start()` — unreachable after `CollectResults` removal | `manager.go` | Removed; caller always passes a slice |
+| `workerID int` param in `runWorker` — received but never used | `worker.go` | Removed |
+| `downloadedCount` in orchestrator — incremented but never read | `orchestrator.go` | Removed |
+| `Connection.Choked`, `Connection.Bitfield`, `Connection.mu` — set but never read | `peer.go` | Removed |
+| `Connection.String()`, `SendNotInterested()` — never called | `peer.go` | Removed |
+| `ConnectToPeer` — thin wrapper called only from `ConnectAndHandshake` | `peer.go` | Inlined into `ConnectAndHandshake` |
+| `Handshake` struct — returned by `PerformHandshake` but immediately discarded | `peer.go` | Removed; `performHandshake` (unexported) returns only `error` |
+| `writeCount`, `mu`, `filePath` fields — tracked/stored but never read externally | `filewriter.go` | Removed |
+| `GetWriteCount()`, `GetFilePath()` — accessors for removed fields | `filewriter.go` | Removed |
+| `WriteAllPieces()` — standalone function never called | `filewriter.go` | Removed |
 
 ---
 
@@ -201,48 +216,44 @@ type TorrentMeta struct {
 }
 ```
 
-### ParseTorrentFile — two-pass design
+### ParseTorrentFile — three-pass design (single file read)
 
-**Pass 1** — library decode (line 49):
+The file is read **once** with `os.ReadFile(path)`. The same `data []byte` is reused for all three passes — no second disk read.
+
+**Dependency:** `github.com/zeebo/bencode` (replaced `jackpal/bencode-go`). The key capability it adds is `bencode.RawMessage` — captures raw bencoded bytes for a field, exactly like `json.RawMessage`.
+
+**Pass 1** — capture top-level fields + raw info bytes:
 ```go
-var torrent bencodeTorrent
-bencode.Unmarshal(file, &torrent)
+type bencodeTorrent struct {
+    Announce string             `bencode:"announce"`
+    Info     bencode.RawMessage `bencode:"info"`  // ← raw bytes, not decoded
+}
+var bt bencodeTorrent
+bencode.DecodeBytes(data, &bt)
+// bt.Info = exact original bytes of the info dict
 ```
-Gets you the structured fields: Announce, Name, Length, PieceLength, Pieces string.
 
-**Pass 2** — manual byte extraction for InfoHash (line 55):
+**Pass 2** — decode structured fields from the raw info bytes:
 ```go
-infoHash, err := calculateInfoHash(path)
-```
-Why can't the library do this? Because `Unmarshal` decodes into a Go struct — you get the *values* but the original bytes are gone. The InfoHash must be `SHA1(raw bencoded info bytes)`. Re-encoding the struct would not produce identical bytes (key ordering, whitespace). So you must extract the raw bytes directly.
-
-### calculateInfoHash → extractInfoDictBytes
-
-This is the most custom code in the project. The function manually walks the `.torrent` file bytes:
-
-```
-data = entire file bytes
-      ↓
-extractInfoDictBytes(data):
-  1. Read first byte → must be 'd' (root dict)
-  2. Loop: read key string → is it "info"?
-     - No: skipBencodeValue(r) and continue
-     - Yes: record current byte position
-            findMatchingEnd(data[infoStart:]) → find where info dict ends
-            return data[infoStart : infoStart+end]
+var info bencodeInfo
+bencode.DecodeBytes(bt.Info, &info)
+// info.Name, info.Length, info.PieceLength, info.Pieces
 ```
 
-**readBencodeString** (line 161): reads `<digits>:<data>`. Accumulates digit bytes until `:`, converts to int, reads that many bytes.
+**Why two decode steps instead of one?** InfoHash = `SHA1(raw bencoded info bytes)`. If you decoded everything into one struct, the library gives you *values* — the original bytes are gone. By capturing `Info` as `RawMessage` first, you have both: the raw bytes for SHA1, and the ability to decode them for the struct fields.
 
-**skipBencodeValue** (line 191): advances the reader past one bencode value without storing it. Handles all 4 types:
-- Integer `i...e`: read until `e`
-- String `N:data`: read length, seek N bytes forward
-- List `l...e`: recursively skip elements until `e`
-- Dict `d...e`: recursively skip key-value pairs until `e`
+```go
+InfoHash: sha1.Sum(bt.Info)  // correct: SHA1 of original bytes, not re-encoded
+```
 
-**findMatchingEnd** (line 274): given bytes starting with `d`, finds the matching `e` at the correct nesting depth. Uses `bencodeValueLength` to skip each key and value by their actual byte length — this is critical because the `pieces` field contains raw binary bytes that may include `d` and `e` characters. If you just scanned for `e`, you'd stop too early inside the pieces data. By computing exact lengths, you skip over string contents entirely.
+Re-encoding would change key order → different SHA1 → wrong InfoHash → tracker rejects you, peers reject handshake.
 
-**bencodeValueLength** (line 303): returns the total byte length of one bencode value (including its delimiters). Recursive for lists and dicts.
+**Pass 3** — split pieces string:
+```go
+pieces, err := splitPieces(info.Pieces)
+```
+
+This design replaced ~110 lines of custom bencode byte-walking (`extractInfoDictBytes`, `readBencodeString`, `skipBencodeValue`) with 3 lines using the library's built-in `RawMessage`.
 
 ### splitPieces (line 79)
 
@@ -371,20 +382,21 @@ conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
 
 **Deadline**: `conn.SetDeadline(time.Now().Add(5 * time.Second))`. If handshake takes more than 5 seconds, the connection is bad. Reset to zero after handshake so it doesn't affect later reads.
 
-### ConnectAndHandshake (line 236)
+### ConnectAndHandshake
 
-Convenience wrapper: connect + handshake in one call. Returns a `*Connection` struct:
+Dials TCP + runs the handshake in one call. Returns:
 ```go
 type Connection struct {
-    Conn     net.Conn
-    Peer     tracker.Peer
-    Choked   bool      // starts true — peer starts choked
-    Bitfield []byte
-    mu       sync.Mutex
+    Conn net.Conn
+    Peer tracker.Peer
 }
 ```
 
-`Choked: true` by default — the protocol requires you to wait for an Unchoke message before sending requests.
+`Choked`, `Bitfield`, and `mu` were removed — they were set but never read anywhere in the codebase. Choke state is tracked implicitly in the worker's unchoke-wait loop.
+
+`performHandshake` is now unexported and returns only `error` — the `Handshake` struct it used to return was always immediately discarded by callers (`_, err = PerformHandshake(...)`).
+
+`ConnectToPeer` was inlined — it was a 3-line wrapper called only from one place.
 
 ### ReadMessage (line 158)
 
@@ -511,7 +523,7 @@ Only contacts the tracker again when the tracker's own requested interval has el
 
 **File:** `internal/downloader/manager.go`
 
-### The Three Structs
+### The Two Structs
 
 ```go
 type PieceWork struct {
@@ -520,6 +532,7 @@ type PieceWork struct {
     Length int    // how many bytes
 }
 // Enqueued into workQueue. No actual data — just a description of work.
+// Also stored in Manager.work as the pre-built list of what to download.
 
 type PieceResult struct {
     Index int
@@ -528,21 +541,15 @@ type PieceResult struct {
 }
 // Sent into resultQueue after download attempt.
 
-// Piece is used internally by the Manager to hold piece metadata.
-// It does NOT hold downloaded data — results flow through PieceResult.
-type Piece struct {
-    Index  int
-    Hash   []byte
-    Length int
-}
-
 type Manager struct {
-    workQueue    chan PieceWork   // buffered
-    resultQueue  chan PieceResult // unbuffered
-    pieces       []Piece         // metadata only, no downloaded data
+    work        []PieceWork     // pre-built work list
+    workQueue   chan PieceWork   // buffered
+    resultQueue chan PieceResult // unbuffered
     ...
 }
 ```
+
+`Piece` was removed — it was a separate struct with identical fields to `PieceWork`, used only as an intermediate between `NewManager` and `Start`. `NewManager` now builds `[]PieceWork` directly.
 
 ### NewManager (line 48)
 

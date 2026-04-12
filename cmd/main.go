@@ -30,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	torrentPath := flag.Arg(0)
+	torrentPath := flag.Arg(0) // first non-flag argument.
 
 	// Banner
 	printBanner()

@@ -57,9 +57,8 @@ func (o *Orchestrator) Download() error {
 	defer writer.Close()
 
 	totalPieces := o.meta.NumPieces()
-	downloadedCount := 0
-	const minIntervalSec = 5   // minimum delay between re-announces (tracker interval can be 0 or very small)
-	const retryDelaySec = 30   // delay between retry rounds when using same peers (no tracker call)
+	const minIntervalSec = 5  // minimum delay between re-announces (tracker interval can be 0 or very small)
+	const retryDelaySec = 30  // delay between retry rounds when using same peers (no tracker call)
 	remaining := make(map[int]struct{})
 	for i := 0; i < totalPieces; i++ {
 		remaining[i] = struct{}{}
@@ -126,9 +125,7 @@ func (o *Orchestrator) Download() error {
 		}
 
 		manager := NewManager(o.meta, peers, o.peerID, o.numWorkers, pieceIndices)
-		if err := manager.Start(); err != nil {
-			return fmt.Errorf("failed to start download manager: %w", err)
-		}
+		manager.Start()
 
 		if round == 0 {
 			fmt.Println("Downloading...")
@@ -147,7 +144,6 @@ func (o *Orchestrator) Download() error {
 			}
 
 			progressTracker.AddPiece(len(result.Data))
-			downloadedCount++
 
 			stats := progressTracker.GetStats()
 			fmt.Printf("\r%s", stats.FormatSimple())
